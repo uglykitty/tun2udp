@@ -463,7 +463,11 @@ int main(int argc, char* argv[])
 	auto pattern = LOG4CPLUS_TEXT("%D{%Y%m%d %H:%M:%S,%Q} [%i] %p %m%n");
 	auto layout = new log4cplus::PatternLayout(pattern);
 	appender->setLayout(
+#if __cplusplus >= 201402L
+		std::unique_ptr<log4cplus::Layout>(layout)
+#else
 		std::auto_ptr<log4cplus::Layout>(layout)
+#endif
 	);
 
 	logger = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("main"));
