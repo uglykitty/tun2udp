@@ -48,4 +48,5 @@ struct thread_t {
 	std::vector<client_t*> clients;
 	int curClient = 0;
 	//time_t checkAliveTime;
+	event* signalUsr1 = NULL;
 };

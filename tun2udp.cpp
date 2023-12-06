@@ -10,11 +10,15 @@
 #include <linux/if_tun.h> // for IFF_TUN TUNSETIFF
 #include <signal.h>
 
-//#include <log4cplus/log4cplus.h>
+#include <log4cplus/version.h>
+#if LOG4CPLUS_VERSION/1000/1000 >=2
+#include <log4cplus/log4cplus.h>
+#else
 #include <log4cplus/logger.h>
 #include <log4cplus/layout.h>
 #include <log4cplus/loggingmacros.h>
 #include <log4cplus/fileappender.h>
+#endif
 
 #include "tun2udp.h"
 
@@ -44,6 +48,20 @@ client_t* client_connect(thread_t* thread, const sockaddr* remote);
 
 log4cplus::Logger logger;
 
+void addAppender()
+{
+	log4cplus::SharedAppenderPtr appender(new log4cplus::FileAppender(LOG4CPLUS_TEXT("tun2udp.log"), std::ios::app));
+
+#if __cplusplus >= 201402L
+	appender->setLayout(std::unique_ptr<log4cplus::Layout>
+#else
+	appender->setLayout(std::auto_ptr<log4cplus::Layout>
+#endif
+		(new log4cplus::PatternLayout(LOG4CPLUS_TEXT("%D{%Y%m%d %H:%M:%S,%Q} [%i] %p %m%n"))));
+
+	logger.addAppender(appender);
+}
+
 void data_xor(unsigned char* buf, ssize_t bufLen)
 {
 	for (auto i = 0; i < bufLen; i++) {
@@ -56,6 +74,14 @@ thread_t* thread_new()
 	auto thread = new thread_t;
 	thread->evb = event_base_new();
 	//thread->epfd = epoll_create(64);
+	thread->signalUsr1 = evsignal_new(thread->evb, SIGUSR1, [](evutil_socket_t fd, short event, void* ctx) {
+
+		auto thread = static_cast<thread_t*>(ctx);
+		logger.removeAllAppenders();
+		addAppender();
+
+		}, thread);
+	event_add(thread->signalUsr1, NULL);
 	return thread;
 }
 
@@ -155,8 +181,8 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 			auto clientSize = thread->clients.size();
 			if (clientSize) {
 				auto curClient = thread->clients[thread->curClient];
-				//LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("send ") << recvLen << " bytes to index "
-					//<< thread->curClient << " addr " << curClient->remoteAddr);
+				LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("send ") << recvLen << " bytes to index "
+					<< thread->curClient << " addr " << curClient->remoteAddr);
 				ssize_t sendLen = 0;
 				if (client->tp == TP_UDP) {
 					sendLen = send(curClient->fd, client->buf, recvLen, 0);
@@ -184,8 +210,8 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 					socklen_t addrLen = sizeof(client->remote);
 					recvLen = recvfrom(client->fd, client->buf, sizeof(client->buf), 0, &client->remote, &addrLen);
 					auto newClient = client_accept(thread, client);
-					//LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from addr %s"
-						//<< newClient->remoteAddr);
+					LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from addr %s"
+						<< newClient->remoteAddr);
 				}
 				else {
 					client_accept(thread, client);
@@ -205,7 +231,7 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 					return;
 				}
 				client->bufLen += recvLen;
-				//LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from addr %s" << client->remoteAddr);
+				LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from addr %s" << client->remoteAddr);
 			}
 
 			if (recvLen) {
@@ -442,7 +468,7 @@ void thread_dispatch(thread_t* thread)
 
 int main(int argc, char* argv[])
 {
-	auto sighander = [](int) {
+	auto sighander = [](int signo) {
 		exit(0);
 		};
 
@@ -454,25 +480,16 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	auto tun = argv[1]; // tun
-	auto port = argv[2]; // port
-
-	//log4cplus::Initializer initializer;
-
-	log4cplus::SharedAppenderPtr appender(new log4cplus::FileAppender(LOG4CPLUS_TEXT("tun2udp.log"), std::ios::app));
-	auto pattern = LOG4CPLUS_TEXT("%D{%Y%m%d %H:%M:%S,%Q} [%i] %p %m%n");
-	auto layout = new log4cplus::PatternLayout(pattern);
-	appender->setLayout(
-#if __cplusplus >= 201402L
-		std::unique_ptr<log4cplus::Layout>(layout)
-#else
-		std::auto_ptr<log4cplus::Layout>(layout)
+#if LOG4CPLUS_VERSION/1000/1000 >=2
+	log4cplus::Initializer initializer;
 #endif
-	);
 
 	logger = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("main"));
+	logger.setLogLevel(log4cplus::INFO_LOG_LEVEL);
+	addAppender();
 
-	logger.addAppender(appender);
+	auto tun = argv[1]; // tun
+	auto port = argv[2]; // port
 
 	auto thread = thread_new();
 	if (NULL == client_new_tun(thread, tun)) {
