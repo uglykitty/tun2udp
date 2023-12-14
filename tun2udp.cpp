@@ -50,7 +50,8 @@ log4cplus::Logger logger;
 
 void addAppender()
 {
-	log4cplus::SharedAppenderPtr appender(new log4cplus::FileAppender(LOG4CPLUS_TEXT("tun2udp.log"), std::ios::app));
+	// log4cplus::SharedAppenderPtr appender(new log4cplus::FileAppender(LOG4CPLUS_TEXT("tun2udp.log"), std::ios::app));
+	log4cplus::SharedAppenderPtr appender(new log4cplus::DailyRollingFileAppender(LOG4CPLUS_TEXT("tun2udp.log")));
 
 #if __cplusplus >= 201402L
 	appender->setLayout(std::unique_ptr<log4cplus::Layout>
