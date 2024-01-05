@@ -40,7 +40,7 @@ tun2udp tun0 12345
 ## Client
 Create TUN interface tun0 and assign an IP address for it.
 ```
-ip tuntap add mode tun dev tun0 $USER
+ip tuntap add mode tun dev tun0 user $USER
 ip addr add 192.168.5.2/24 dev tun0
 ip link set dev tun0 up
 ```
