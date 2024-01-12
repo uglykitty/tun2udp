@@ -1,4 +1,4 @@
-﻿#include <string.h>
+#include <string.h>
 #include <time.h>
 
 #include <sys/ioctl.h>
@@ -97,6 +97,7 @@ void thread_remove_client(thread_t* thread, client_t* client)
 	if (client->id < 0) {
 		return;
 	}
+	LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("remove ") << client->remoteAddr << LOG4CPLUS_TEXT(" from list"));
 	auto clientSize = thread->clients.size();
 	auto lastIndex = clientSize - 1;
 	if (client->id < lastIndex) {
@@ -117,34 +118,46 @@ void show_clients(thread_t* thread)
 	//}
 }
 
-void close_client(thread_t* thread, client_t* client)
+void reset_client(thread_t* thread, client_t* client)
 {
 	if (client->id > -1) {
 		thread_remove_client(thread, client);
+		client->id = -1;
 	}
+	if (client->fd != -1) {
+		evutil_closesocket(client->fd);
+		client->fd = -1;
+	}
+	if (client->ev) {
+		event_free(client->ev);
+		client->ev = NULL;
+	}
+}
 
-	if (client->mode == CM_CLIENT) {
-		client_connect(thread, &client->remote);
-	}
+void close_client(thread_t* thread, client_t* client)
+{
+	reset_client(thread, client);
+	
 	LOG4CPLUS_INFO(logger, LOG4CPLUS_TEXT("close ") << client->remoteAddr);
-	evutil_closesocket(client->fd);
+
 	if (client->ev_reconnect) {
 		event_free(client->ev_reconnect);
 	}
-	event_free(client->ev);
+
 	delete client;
 }
 
 void client_reconnect_later(thread_t* thread, client_t* client)
 {
-	thread_remove_client(thread, client);
+	reset_client(thread, client);
+
 	if (!client->ev_reconnect) {
 		client->ev_reconnect = evtimer_new(thread->evb, [](evutil_socket_t, short, void*ctx) {
-			
 			auto client = static_cast<client_t*>(ctx);
 			auto thread = client->thread;
+			auto remote = client->remote;
 			close_client(thread, client);
-
+			client_connect(thread, &remote);
 			}, client);
 	}
 	evtimer_add(client->ev_reconnect, &client->tv_reconnect);
@@ -169,7 +182,16 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 	auto thread = client->thread;
 
 	if (what & EV_TIMEOUT) {
+		LOG4CPLUS_INFO(logger, LOG4CPLUS_TEXT("timeout to recv from ") << client->remoteAddr);
+
+		auto mode = client->mode;
+		auto remote = client->remote;
+
 		close_client(thread, client);
+
+		if (mode == CM_CLIENT) {
+			client_connect(thread, &remote);
+		}
 		return;
 	}
 
@@ -198,10 +220,14 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 					}
 				}
 				else {
-					LOG4CPLUS_WARN(logger, LOG4CPLUS_TEXT("send to ") << client->remoteAddr << " error");
+					if (EAGAIN != errno) {
+						LOG4CPLUS_WARN(logger, LOG4CPLUS_TEXT("send to ") << curClient->remoteAddr
+							<< LOG4CPLUS_TEXT(" failed with errno ") << errno
+						);
 
-					client_reconnect_later(thread, curClient);
-					return;
+						client_reconnect_later(thread, curClient);
+						return;
+					}
 				}
 			}
 		}
@@ -211,8 +237,7 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 					socklen_t addrLen = sizeof(client->remote);
 					recvLen = recvfrom(client->fd, client->buf, sizeof(client->buf), 0, &client->remote, &addrLen);
 					auto newClient = client_accept(thread, client);
-					LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from addr %s"
-						<< newClient->remoteAddr);
+					LOG4CPLUS_DEBUG(logger, recvLen << " bytes received from " << newClient->remoteAddr);
 				}
 				else {
 					client_accept(thread, client);
@@ -222,7 +247,8 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 			else {
 				recvLen = recv(client->fd, client->buf + client->bufLen, sizeof(client->buf) - client->bufLen, 0);
 				if (recvLen <= 0) {
-					LOG4CPLUS_WARN(logger, LOG4CPLUS_TEXT("recv failed with ") << recvLen << " from addr " << client->remoteAddr);
+					LOG4CPLUS_WARN(logger, LOG4CPLUS_TEXT("recv failed with ") << recvLen << " from addr "
+						<< client->remoteAddr);
 					if (client->mode == CM_CLIENT) {
 						client_reconnect_later(thread, client);
 					}
@@ -232,7 +258,7 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 					return;
 				}
 				client->bufLen += recvLen;
-				LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from addr %s" << client->remoteAddr);
+				LOG4CPLUS_DEBUG(logger, LOG4CPLUS_TEXT("") << recvLen << " bytes received from " << client->remoteAddr);
 			}
 
 			if (recvLen) {
@@ -406,6 +432,8 @@ client_t* client_connect(thread_t* thread, const sockaddr* remote)
 
 client_t* client_connect(thread_t* thread, const char* host, const char* port)
 {
+	LOG4CPLUS_INFO(logger, LOG4CPLUS_TEXT("connecting to ") << host << LOG4CPLUS_TEXT(":") << port);
+
 	addrinfo hint = { 0 };
 	hint.ai_protocol = IPPROTO_IP;
 	hint.ai_family = AF_INET;
@@ -469,12 +497,12 @@ void thread_dispatch(thread_t* thread)
 
 int main(int argc, char* argv[])
 {
-	auto sighander = [](int signo) {
-		exit(0);
-		};
+	//auto sighander = [](int signo) {
+	//	exit(0);
+	//	};
 
-	signal(SIGINT, sighander);
-	signal(SIGKILL, sighander);
+	//signal(SIGINT, sighander);
+	//signal(SIGKILL, sighander);
 
 	if (argc < 3) {
 		printf("argv error\n");
@@ -487,6 +515,7 @@ int main(int argc, char* argv[])
 
 	logger = log4cplus::Logger::getInstance(LOG4CPLUS_TEXT("main"));
 	logger.setLogLevel(log4cplus::INFO_LOG_LEVEL);
+	//logger.setLogLevel(log4cplus::DEBUG_LOG_LEVEL);
 	addAppender();
 
 	auto tun = argv[1]; // tun
