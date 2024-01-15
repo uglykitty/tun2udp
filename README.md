@@ -60,6 +60,12 @@ ip addr add 192.168.5.2/24 dev tun0
 ip link set dev tun0 up
 ```
 
+or
+
+```shell
+nmcli connection add type tun mode tun group $GROUPS ifname tun0 con-name tun0 ip4 192.168.5.2/24
+```
+
 ```shell
 tun2udp tun0 12345 host.of.server
 ```
