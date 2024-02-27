@@ -226,7 +226,7 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 						);
 
 						client_reconnect_later(thread, curClient);
-						return;
+						//return;
 					}
 				}
 			}
@@ -247,7 +247,7 @@ void on_client_event(evutil_socket_t fd, short what, void* ctx)
 			else {
 				recvLen = recv(client->fd, client->buf + client->bufLen, sizeof(client->buf) - client->bufLen, 0);
 				if (recvLen <= 0) {
-					LOG4CPLUS_WARN(logger, LOG4CPLUS_TEXT("recv failed with ") << recvLen << " from addr "
+					LOG4CPLUS_WARN(logger, LOG4CPLUS_TEXT("recv failed with errno ") << errno << " from addr "
 						<< client->remoteAddr);
 					if (client->mode == CM_CLIENT) {
 						client_reconnect_later(thread, client);
